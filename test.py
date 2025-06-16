@@ -19,7 +19,7 @@ if uploaded_images:
             files_payload[f"file{i}"] = (file.name, file.getvalue(), file.type)
 
         # Replace with your actual n8n webhook URL
-        webhook_url = "http://localhost:5678/webhook/event-carousel-upload"
+        webhook_url = "https://dhina04.app.n8n.cloud/webhook-test/928753fa-c20f-4ebb-a0fc-2efd71a8b100"
 
         try:
             response = requests.post(
