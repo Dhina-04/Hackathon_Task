@@ -1,55 +1,67 @@
 import streamlit as st
 import requests
-import json
+import time
 from PIL import Image
 from io import BytesIO
 
-# --- Config ---
-N8N_WEBHOOK_URL = "https://dhina04.app.n8n.cloud/webhook-test/928753fa-c20f-4ebb-a0fc-2efd71a8b100"  # Replace this with your actual n8n webhook URL
+# Configuration
+N8N_WEBHOOK_URL = "https://dhina04.app.n8n.cloud/webhook-test/928753fa-c20f-4ebb-a0fc-2efd71a8b100"  # <-- update this
+POLLING_WAIT_SECONDS = 5
 
-# --- Streamlit UI ---
-st.title("Event Photo Quality Filter")
-st.markdown("Upload event photos, and the best ones will be selected using brightness + sharpness scoring.")
+# Streamlit UI
+st.title("📸 Event Photo Auto-Caption & Approval")
+st.write("Upload event images, auto-analyze, and generate captions.")
 
-uploaded_files = st.file_uploader("Upload images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("Upload Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
-num_required = st.number_input("Number of top images to select", min_value=1, value=3)
+if uploaded_files and st.button("📤 Send to AI Caption Generator"):
+    # Prepare and send images to n8n webhook
+    with st.spinner("Uploading and analyzing images..."):
+        files = [("files", (file.name, file, file.type)) for file in uploaded_files]
+        response = requests.post(N8N_WEBHOOK_URL, files=files)
+        if response.status_code == 200:
+            st.success("✅ Images sent successfully!")
+            workflow_response = response.json()
 
-if st.button("Process Images") and uploaded_files:
-    with st.spinner("Uploading and processing..."):
+            # Expect n8n to return:
+            # {
+            #   "selected": [{"filename": "image1.jpg", "caption": "A moment from the event"}, ...],
+            #   "originalImages": [{...}]
+            # }
 
-        # Step 1: Prepare files for upload to n8n
-        files_payload = [("images", (file.name, file, file.type)) for file in uploaded_files]
-        data_payload = {"num_required": num_required}
+            if "selected" in workflow_response and isinstance(workflow_response["selected"], list):
+                selected = workflow_response["selected"]
 
-        try:
-            response = requests.post(N8N_WEBHOOK_URL, files=files_payload, data=data_payload)
-            response.raise_for_status()
-            result = response.json()
-        except Exception as e:
-            st.error(f"Error processing images: {e}")
-            st.stop()
+                st.header("🖼️ Carousel Preview")
+                for idx, item in enumerate(selected):
+                    col1, col2 = st.columns([2, 3])
+                    with col1:
+                        image_url = item.get("url")
+                        if not image_url:
+                            image_path = next((f for f in uploaded_files if f.name == item["filename"]), None)
+                            if image_path:
+                                image = Image.open(image_path)
+                                st.image(image, caption=item["filename"], width=300)
+                            else:
+                                st.warning("Image not found.")
+                        else:
+                            img_data = requests.get(image_url).content
+                            image = Image.open(BytesIO(img_data))
+                            st.image(image, caption=item["filename"], width=300)
 
-        # Step 2: Extract selected and original image data
-        selected_filenames = [img['filename'] for img in result.get("selected", [])]
-        original_images = result.get("originalImages", [])
+                    with col2:
+                        st.subheader(f"Caption for {item['filename']}")
+                        st.info(item["caption"])
+                        col_approve, col_reject, col_regen = st.columns(3)
+                        if col_approve.button(f"✅ Approve {idx}"):
+                            st.success(f"{item['filename']} approved ✅")
+                        if col_reject.button(f"❌ Reject {idx}"):
+                            st.warning(f"{item['filename']} rejected ❌")
+                        if col_regen.button(f"♻️ Regenerate {idx}"):
+                            st.info(f"{item['filename']} will be regenerated 🔄")
+                            # TODO: Trigger n8n caption regeneration (e.g. via another webhook)
 
-        # Step 3: Display selected images in carousel
-        st.success(f"Top {len(selected_filenames)} images selected.")
-        st.subheader("🎯 Selected Image Previews")
-
-        for image_data in original_images:
-            if image_data["filename"] in selected_filenames:
-                st.markdown(f"**{image_data['filename']}**")
-                file_bytes = next((f.read() for f in uploaded_files if f.name == image_data["filename"]), None)
-                if file_bytes:
-                    st.image(file_bytes, width=300)
-                st.write(f"Brightness: {image_data['brightness']} | Sharpness: {image_data['sharpness']}")
-                st.markdown("---")
-
-        # Step 4: Show Final JSON
-        st.subheader("📦 Final Output JSON")
-        st.json(result)
-
-else:
-    st.info("Please upload image files to begin.")
+            else:
+                st.error("⚠️ Invalid response from AI workflow.")
+        else:
+            st.error("🚫 Failed to contact the webhook. Check URL and try again.")
